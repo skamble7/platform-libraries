@@ -1,0 +1,50 @@
+[project]
+name = "platform-libraries"
+version = "0.0.0"
+description = "Monorepo workspace for platform libraries"
+requires-python = ">=3.11"
+dependencies = ["polyllm[langchain]"]
+
+[tool.uv.workspace]
+members = ["libs/*"]
+
+[tool.uv.sources]
+polyllm = { workspace = true }
+
+[tool.uv]
+dev-dependencies = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.6",
+  "mypy>=1.10",
+]
+
+# ---- ruff (shared) ----
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # allow long lines; rely on formatter if desired
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---- mypy (shared) ----
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+strict_equality = true
+
+# ---- pytest (shared) ----
+[tool.pytest.ini_options]
+testpaths = ["libs"]
+asyncio_mode = "auto"
+markers = [
+  "integration: marks tests that make real network calls (run with -m integration)",
+]
