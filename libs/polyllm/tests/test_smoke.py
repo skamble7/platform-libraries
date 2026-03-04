@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 
 from polyllm import LLMClient, PolyllmConfig
+
+
+SECRETS_FILE = "./secrets.local.json"
+
+EXPECTED_SENTENCE = (
+    "polyllm is a config-driven, provider-agnostic LLM client library that lets apps "
+    "switch providers/models without code changes."
+)
 
 
 def _load_local_secrets(file_path: str) -> dict:
@@ -20,24 +30,41 @@ def _load_local_secrets(file_path: str) -> dict:
 
 
 def _has_real_local_key(file_path: str, key_name: str) -> bool:
-    """
-    Returns True if secrets.local.json exists and contains a non-placeholder value for key_name.
-    """
     data = _load_local_secrets(file_path)
     v = data.get(key_name)
     if not isinstance(v, str) or not v.strip():
         return False
-
-    # Placeholder detection (matches your examples)
     if v.strip() in {"sk-...", "AIza..."}:
         return False
-
-    # Light sanity check
     if key_name == "OPENAI_API_KEY":
         return v.strip().startswith("sk-")
     if key_name == "GEMINI_API_KEY":
         return v.strip().startswith("AIza")
     return True
+
+
+def _norm(s: str) -> str:
+    return " ".join((s or "").strip().split()).lower()
+
+
+def _one_sentenceish(text: str) -> bool:
+    """
+    Heuristic: treat as 1 sentence if it doesn't contain multiple sentence-ending punctuations.
+    (Keeps us from failing on tiny variations.)
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    # Count sentence terminators. Allow one.
+    terminators = re.findall(r"[.!?]+", t)
+    return len(terminators) <= 1
+
+
+def _assert_contains_all(text: str, required: Iterable[str]) -> None:
+    t = _norm(text)
+    missing = [r for r in required if _norm(r) not in t]
+    if missing:
+        raise AssertionError(f"Missing required phrases: {missing}\nGot:\n{text}")
 
 
 def test_config_load_smoke():
@@ -47,7 +74,7 @@ def test_config_load_smoke():
             "default": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "api_key_ref": "file:./secrets.local.json#OPENAI_API_KEY",
+                "api_key_ref": f"file:{SECRETS_FILE}#OPENAI_API_KEY",
             }
         },
     )
@@ -57,14 +84,8 @@ def test_config_load_smoke():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_openai_chat_integration_print_response():
-    """
-    Integration test: makes a real OpenAI network call.
-
-    Run:
-      uv run pytest -m integration -s
-    """
-    if not _has_real_local_key("./secrets.local.json", "OPENAI_API_KEY"):
+async def test_openai_chat_integration_json_contract():
+    if not _has_real_local_key(SECRETS_FILE, "OPENAI_API_KEY"):
         pytest.skip("secrets.local.json missing or OPENAI_API_KEY looks like a placeholder")
 
     cfg = PolyllmConfig(
@@ -73,52 +94,52 @@ async def test_openai_chat_integration_print_response():
             "openai": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "api_key_ref": "file:./secrets.local.json#OPENAI_API_KEY",
+                "api_key_ref": f"file:{SECRETS_FILE}#OPENAI_API_KEY",
                 "temperature": 0.1,
-                "max_tokens": 128,
+                "max_tokens": 256,
+                "timeout_seconds": 60,
+                "max_retries": 2,
             }
         },
     )
 
     client = LLMClient(cfg)
 
+    prompt = (
+        "Return ONLY valid JSON. No markdown, no extra text.\n"
+        'Schema: { "ok": true, "summary": "<exact sentence>" }\n'
+        f'The "summary" MUST be exactly:\n"{EXPECTED_SENTENCE}"\n'
+    )
+
     result = await client.chat(
         [
-            {"role": "system", "content": "You are a concise assistant."},
-            {
-                "role": "user",
-                "content": (
-                    "Reply with 'OK' then exactly 1 sentence: "
-                    "'polyllm is a config-driven, provider-agnostic LLM client library that lets apps "
-                    "switch providers/models without code changes.'"
-                ),
-            },
-        ]
+            {"role": "system", "content": "You are a strict JSON emitter."},
+            {"role": "user", "content": prompt},
+        ],
+        profile="openai",
     )
 
     print("\n[polyllm integration] provider=openai model=gpt-4o-mini")
     print(result.text)
 
-    assert isinstance(result.text, str)
-    assert len(result.text.strip()) > 0
-    assert "OK" in result.text
+    obj = json.loads(result.text)
+    assert obj["ok"] is True
+    assert _norm(obj["summary"]) == _norm(EXPECTED_SENTENCE)
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_gemini_chat_integration_print_response():
+async def test_google_genai_chat_integration_text_capability_contract():
     """
-    Integration test: makes a real Gemini network call via LangChain's google_genai provider.
+    Google GenAI (Gemini) is not reliably "verbatim" even at low temperature.
+    So this integration test verifies a stable *capability contract*:
 
-    Important:
-    - LangChain init_chat_model does NOT accept model_provider="gemini".
-    - For Gemini through langchain-google-genai, use model_provider="google_genai".
-    - Model names are provider/package-version dependent; "gemini-flash-latest" works with this setup.
-
-    Run:
-      uv run pytest -m integration -s
+    - returns non-empty output
+    - output is roughly one sentence
+    - output contains required meaning-bearing phrases
+    - provider/model in result.raw matches the profile selection
     """
-    if not _has_real_local_key("./secrets.local.json", "GEMINI_API_KEY"):
+    if not _has_real_local_key(SECRETS_FILE, "GEMINI_API_KEY"):
         pytest.skip("secrets.local.json missing or GEMINI_API_KEY looks like a placeholder")
 
     cfg = PolyllmConfig(
@@ -127,32 +148,53 @@ async def test_gemini_chat_integration_print_response():
             "gemini": {
                 "provider": "google_genai",
                 "model": "gemini-flash-latest",
-                "api_key_ref": "file:./secrets.local.json#GEMINI_API_KEY",
+                "api_key_ref": f"file:{SECRETS_FILE}#GEMINI_API_KEY",
                 "temperature": 0.1,
-                "max_tokens": 128,
+                # adapter maps this to max_output_tokens
+                "max_tokens": 512,
+                "timeout_seconds": 60,
+                "max_retries": 2,
+                "provider_options": {},
             }
         },
     )
 
     client = LLMClient(cfg)
 
+    prompt = (
+        "Write exactly ONE sentence that communicates this meaning:\n"
+        f"- {EXPECTED_SENTENCE}\n"
+        "Do not use bullet points. Do not add a second sentence."
+    )
+
     result = await client.chat(
         [
             {"role": "system", "content": "You are a concise assistant."},
-            {
-                "role": "user",
-                "content": (
-                    "Reply with 'OK' then exactly 1 sentence: "
-                    "'polyllm is a config-driven, provider-agnostic LLM client library that lets apps "
-                    "switch providers/models without code changes.'"
-                ),
-            },
-        ]
+            {"role": "user", "content": prompt},
+        ],
+        profile="gemini",
     )
 
     print("\n[polyllm integration] provider=google_genai model=gemini-flash-latest")
     print(result.text)
 
-    assert isinstance(result.text, str)
-    assert len(result.text.strip()) > 0
-    assert "OK" in result.text
+    assert isinstance(result.text, str) and result.text.strip()
+
+    # Basic shape
+    assert _one_sentenceish(result.text), f"Expected one sentence-ish output.\nGot:\n{result.text}"
+
+    # Ensure routing metadata is correct (this is important for polyllm)
+    assert result.raw.get("provider") == "google_genai"
+    assert result.raw.get("model") == "gemini-flash-latest"
+
+    # Meaning-bearing phrases (robust against paraphrase)
+    _assert_contains_all(
+        result.text,
+        required=[
+            "config",          # config-driven/configuration
+            "provider",        # provider/providers
+            "model",           # model/models
+            "switch",          # switching
+            "code changes",    # without code changes / no code changes
+        ],
+    )

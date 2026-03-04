@@ -9,10 +9,6 @@ from typing import Optional, Protocol, Tuple
 
 class SecretProvider(Protocol):
     def get(self, ref: str) -> Optional[str]:
-        """
-        Resolve a secret reference into a secret value.
-        Return None if not found.
-        """
         raise NotImplementedError
 
 
@@ -29,13 +25,6 @@ def _split_ref(ref: str) -> Tuple[str, str]:
 
 
 def _split_path_and_key(rest: str) -> Tuple[str, Optional[str]]:
-    """
-    For file refs, we support:
-      file:/path/to/secrets.json#OPENAI_API_KEY
-      file:./secrets.json#OPENAI_API_KEY
-
-    Returns: (path_str, key)
-    """
     if "#" in rest:
         path_str, key = rest.split("#", 1)
         key = key.strip() or None
@@ -44,12 +33,6 @@ def _split_path_and_key(rest: str) -> Tuple[str, Optional[str]]:
 
 
 class EnvSecretProvider:
-    """
-    Resolves:
-      env:OPENAI_API_KEY
-      env:GEMINI_API_KEY
-    """
-
     def get(self, ref: str) -> Optional[str]:
         scheme, rest = _split_ref(ref)
         if scheme != "env":
@@ -60,32 +43,13 @@ class EnvSecretProvider:
 
 @dataclass
 class FileSecretProvider:
-    """
-    Local-dev secrets provider.
-
-    Supports secret refs:
-      file:/abs/path/secrets.json#OPENAI_API_KEY
-      file:./secrets.local.json#OPENAI_API_KEY
-
-    File format (JSON):
-      {
-        "OPENAI_API_KEY": "sk-...",
-        "GEMINI_API_KEY": "AIza..."
-      }
-
-    Notes:
-    - This is for local development only. Do not commit secret files.
-    - Caches file contents in-memory for performance.
-    """
-
-    default_path: Optional[str] = None  # optional default if ref omits path
+    default_path: Optional[str] = None
     _cache_path: Optional[str] = None
     _cache_data: Optional[dict] = None
 
     def _load_json(self, path_str: str) -> dict:
         p = Path(path_str).expanduser()
         if not p.is_absolute():
-            # resolve relative paths from current working directory
             p = (Path.cwd() / p).resolve()
 
         if self._cache_path == str(p) and self._cache_data is not None:
@@ -109,14 +73,11 @@ class FileSecretProvider:
 
         path_str, key = _split_path_and_key(rest)
 
-        # Allow "file:#KEY" if default_path is provided
         if (not path_str or path_str == "") and self.default_path:
             path_str = self.default_path
 
         if not path_str:
-            raise ValueError(
-                f"file:* ref requires a path unless default_path is set. Got: {ref}"
-            )
+            raise ValueError(f"file:* ref requires a path unless default_path is set. Got: {ref}")
         if not key:
             raise ValueError(f"file:* ref must include '#<KEY>' suffix. Got: {ref}")
 
@@ -131,12 +92,6 @@ class FileSecretProvider:
 
 @dataclass
 class CompositeSecretProvider:
-    """
-    Try multiple providers in order; return first non-None.
-    Useful when you want:
-      - env first in CI
-      - file fallback locally
-    """
     providers: tuple[SecretProvider, ...]
 
     def get(self, ref: str) -> Optional[str]:
@@ -147,7 +102,6 @@ class CompositeSecretProvider:
                 if v is not None:
                     return v
             except Exception as e:
-                # Keep trying other providers; if all fail and nothing returns, raise last error.
                 last_err = e
         if last_err is not None:
             raise last_err
@@ -155,9 +109,4 @@ class CompositeSecretProvider:
 
 
 def default_secret_provider() -> SecretProvider:
-    """
-    Default behavior:
-      - Resolve env:* from environment
-      - Resolve file:* from local JSON file refs
-    """
     return CompositeSecretProvider(providers=(EnvSecretProvider(), FileSecretProvider()))

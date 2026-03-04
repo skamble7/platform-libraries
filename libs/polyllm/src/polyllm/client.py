@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .config import ModelProfile, PolyllmConfig
+from .providers import get_provider_adapter
 from .secrets import SecretProvider, default_secret_provider
 
 
@@ -15,30 +16,75 @@ class ChatResult:
 
 def _resolve_api_key(profile: ModelProfile, secrets: SecretProvider) -> Optional[str]:
     """
-    Resolve the API key using:
-      1) api_key_ref (preferred)  e.g. env:OPENAI_API_KEY or file:./secrets.json#OPENAI_API_KEY
+    Resolve API key using:
+      1) api_key_ref (preferred)
       2) api_key_env (deprecated, backward compatible)
     """
     if profile.api_key_ref:
         return secrets.get(profile.api_key_ref)
 
-    # Backward compatibility: api_key_env="OPENAI_API_KEY"
     if profile.api_key_env:
-        # Resolve as env:* to keep one mechanism
         return secrets.get(f"env:{profile.api_key_env}")
 
     return None
 
 
+def _resolve_credentials_bundle(profile: ModelProfile, secrets: SecretProvider) -> Dict[str, str]:
+    """
+    Resolve secret_refs (Option A) into credential_name -> secret_value.
+
+    Missing secret value is treated as an error (better fail-fast than partial auth).
+    """
+    out: Dict[str, str] = {}
+    for name, ref in (profile.secret_refs or {}).items():
+        ref = (ref or "").strip()
+        if not ref:
+            continue
+        val = secrets.get(ref)
+        if val is None:
+            raise ValueError(
+                f"Missing secret for '{name}' (ref='{ref}') in profile '{profile.provider}:{profile.model}'."
+            )
+        out[name] = val
+    return out
+
+
+async def _maybe_close_chat_model(llm: Any) -> None:
+    """
+    Best-effort cleanup for LangChain models / underlying HTTP clients.
+
+    Some LangChain integrations keep an AsyncClient that should be closed.
+    We try common patterns without hard dependency on any specific provider.
+    """
+    if llm is None:
+        return
+
+    # aclose() is most common for async cleanup
+    aclose = getattr(llm, "aclose", None)
+    if callable(aclose):
+        try:
+            res = aclose()
+            if hasattr(res, "__await__"):
+                await res
+        except Exception:
+            return
+
+    # close() sometimes exists (sync)
+    close = getattr(llm, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            return
+
+
 class LLMClient:
     """
-    Minimal facade with internal secret resolution.
+    Minimal facade with:
+      - internal secret resolution (SecretProvider)
+      - provider adapter layer (per-provider auth + param mapping)
 
-    - Clients may pass PolyllmConfig, but must not pass raw secrets.
-    - Secrets are resolved by polyllm using a SecretProvider:
-        - env:* (CI/dev)
-        - file:* (local dev)
-      Vault can be added later without changing the public API.
+    Clients may pass PolyllmConfig, but must not pass raw secrets.
     """
 
     def __init__(self, cfg: PolyllmConfig, *, secrets: Optional[SecretProvider] = None) -> None:
@@ -54,26 +100,23 @@ class LLMClient:
     async def chat(self, messages: List[Dict[str, str]], *, profile: Optional[str] = None) -> ChatResult:
         p = self._resolve_profile(profile)
 
-        # LangChain is optional; require langchain extra for actual calls
-        try:
-            from langchain.chat_models import init_chat_model
-        except Exception as e:
-            raise RuntimeError(
-                "LangChain backend not installed. Install with: pip install polyllm[langchain]"
-            ) from e
-
         api_key = _resolve_api_key(p, self.secrets)
+        credentials = _resolve_credentials_bundle(p, self.secrets)
 
-        llm = init_chat_model(
-            model=p.model,
-            model_provider=p.provider,
-            temperature=p.temperature,
-            api_key=api_key,   # direct providers use this; vertex/bedrock often use ambient creds
-            base_url=p.base_url,
+        adapter = get_provider_adapter(p.provider)
+        llm = adapter.create_chat_model(
+            p,
+            api_key=api_key,
+            credentials=credentials,
+            secrets=self.secrets,
         )
 
-        resp = await llm.ainvoke(messages)
-        text = getattr(resp, "content", None) or str(resp)
+        try:
+            resp = await llm.ainvoke(messages)
+            text = getattr(resp, "content", None) or str(resp)
+        finally:
+            # Prevent "Event loop is closed" warnings from dangling httpx clients
+            await _maybe_close_chat_model(llm)
 
         return ChatResult(
             text=text,
