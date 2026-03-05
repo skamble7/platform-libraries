@@ -43,6 +43,12 @@ def _has_real_local_key(file_path: str, key_name: str) -> bool:
     return True
 
 
+def _has_aws_keys(file_path: str) -> bool:
+    return _has_real_local_key(file_path, "AWS_ACCESS_KEY_ID") and _has_real_local_key(
+        file_path, "AWS_SECRET_ACCESS_KEY"
+    )
+
+
 def _norm(s: str) -> str:
     return " ".join((s or "").strip().split()).lower()
 
@@ -196,5 +202,75 @@ async def test_google_genai_chat_integration_text_capability_contract():
             "model",           # model/models
             "switch",          # switching
             "code changes",    # without code changes / no code changes
+        ],
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_bedrock_chat_integration_text_capability_contract():
+    """
+    AWS Bedrock (Claude Haiku via Bedrock) capability contract test.
+
+    Verifies:
+    - returns non-empty output
+    - output is roughly one sentence
+    - output contains required meaning-bearing phrases
+    - provider/model in result.raw matches the profile selection
+    """
+    if not _has_aws_keys(SECRETS_FILE):
+        pytest.skip("secrets.local.json missing or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY not set")
+
+    cfg = PolyllmConfig(
+        default_profile="bedrock",
+        profiles={
+            "bedrock": {
+                "provider": "bedrock",
+                "model": "anthropic.claude-3-haiku-20240307-v1:0",
+                "aws_region": "us-east-1",
+                "temperature": 0.1,
+                "max_tokens": 512,
+                "secret_refs": {
+                    "access_key": f"file:{SECRETS_FILE}#AWS_ACCESS_KEY_ID",
+                    "secret_key": f"file:{SECRETS_FILE}#AWS_SECRET_ACCESS_KEY",
+                },
+            }
+        },
+    )
+
+    client = LLMClient(cfg)
+
+    prompt = (
+        "Write exactly ONE sentence that communicates this meaning:\n"
+        f"- {EXPECTED_SENTENCE}\n"
+        "Do not use bullet points. Do not add a second sentence."
+    )
+
+    result = await client.chat(
+        [
+            {"role": "system", "content": "You are a concise assistant."},
+            {"role": "user", "content": prompt},
+        ],
+        profile="bedrock",
+    )
+
+    print("\n[polyllm integration] provider=bedrock model=anthropic.claude-3-haiku-20240307-v1:0")
+    print(result.text)
+
+    assert isinstance(result.text, str) and result.text.strip()
+
+    assert _one_sentenceish(result.text), f"Expected one sentence-ish output.\nGot:\n{result.text}"
+
+    assert result.raw.get("provider") == "bedrock"
+    assert result.raw.get("model") == "anthropic.claude-3-haiku-20240307-v1:0"
+
+    _assert_contains_all(
+        result.text,
+        required=[
+            "config",       # config-driven/configuration
+            "provider",     # provider/providers
+            "model",        # model/models
+            "switch",       # switching
+            "code changes", # without code changes / no code changes
         ],
     )
