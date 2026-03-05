@@ -1,6 +1,6 @@
 [project]
 name = "polyllm"
-version = "0.1.1"
+version = "0.1.2"
 description = "Config-driven provider-agnostic LLM client (LangChain-backed)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ langchain = [
   "langchain>=0.2,<0.4",
   "langchain-openai>=0.1,<0.3",
   "langchain-anthropic>=0.1,<0.3",
-  "langchain-google-genai>=1.0,<2.0",
+  "langch   ain-google-genai>=1.0,<2.0",
   "langchain-aws>=0.1,<0.3",
 ]
 

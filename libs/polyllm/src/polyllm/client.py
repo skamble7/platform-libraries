@@ -14,6 +14,29 @@ class ChatResult:
     raw: Dict[str, Any]
 
 
+def _coerce_content(raw: Any) -> Optional[str]:
+    """
+    Normalize LangChain AIMessage.content to a plain string.
+
+    langchain-google-genai>=2.0 (and some other providers) return content as a
+    list of content blocks, e.g. [{'type': 'text', 'text': '...'}], instead of
+    a plain string. We flatten that here so ChatResult.text is always str.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts = []
+        for block in raw:
+            if isinstance(block, dict):
+                parts.append(block.get("text") or block.get("content") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return str(raw)
+
+
 def _resolve_api_key(profile: ModelProfile, secrets: SecretProvider) -> Optional[str]:
     """
     Resolve API key using:
@@ -113,7 +136,7 @@ class LLMClient:
 
         try:
             resp = await llm.ainvoke(messages)
-            text = getattr(resp, "content", None) or str(resp)
+            text = _coerce_content(getattr(resp, "content", None)) or str(resp)
         finally:
             # Prevent "Event loop is closed" warnings from dangling httpx clients
             await _maybe_close_chat_model(llm)
