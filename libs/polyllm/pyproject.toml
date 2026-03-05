@@ -16,7 +16,7 @@ langchain = [
   "langchain>=0.2,<0.4",
   "langchain-openai>=0.1,<0.3",
   "langchain-anthropic>=0.1,<0.3",
-  "langch   ain-google-genai>=1.0,<2.0",
+  "langchain-google-genai>=2.0",
   "langchain-aws>=0.1,<0.3",
 ]
 
