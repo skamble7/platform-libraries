@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from .config import ModelProfile, PolyllmConfig
 from .providers import get_provider_adapter
 from .secrets import SecretProvider, default_secret_provider
+
+_CONFIG_FORGE_URL_ENV = "CONFIG_FORGE_URL"
 
 
 @dataclass
@@ -107,12 +110,72 @@ class LLMClient:
       - internal secret resolution (SecretProvider)
       - provider adapter layer (per-provider auth + param mapping)
 
-    Clients may pass PolyllmConfig, but must not pass raw secrets.
+    Accepts either an inline PolyllmConfig or a ConfigForge canonical ref string.
+
+    Inline config (local development / no ConfigForge):
+        cfg = PolyllmConfig(profiles={"default": {...}})
+        client = LLMClient(cfg)
+        result = await client.chat(messages)
+
+    ConfigForge ref (recommended for platform services):
+        client = LLMClient("prod.llm.openai.astra.primary")
+        result = await client.chat(messages)
+
+    When a ref string is passed, CONFIG_FORGE_URL must be set in the environment.
+    The config is fetched lazily on the first chat() call and cached.
     """
 
-    def __init__(self, cfg: PolyllmConfig, *, secrets: Optional[SecretProvider] = None) -> None:
-        self.cfg = cfg
+    def __init__(
+        self,
+        config: Union[PolyllmConfig, str],
+        *,
+        secrets: Optional[SecretProvider] = None,
+        timeout: float = 5.0,
+        config_forge_url: Optional[str] = None,
+    ) -> None:
+        if isinstance(config, str):
+            self._ref: Optional[str] = config
+            self.cfg: Optional[PolyllmConfig] = None
+        else:
+            self._ref = None
+            self.cfg = config
+
         self.secrets: SecretProvider = secrets or default_secret_provider()
+        self._timeout = timeout
+        self._config_forge_url = config_forge_url  # overrides CONFIG_FORGE_URL env var
+
+    async def _ensure_config(self) -> None:
+        """Lazily fetch config from ConfigForge if this client was created with a ref string."""
+        if self.cfg is not None:
+            return
+
+        try:
+            import httpx
+        except ImportError as exc:
+            raise ImportError(
+                "httpx is required to use ConfigForge ref strings with LLMClient. "
+                "Install with: pip install polyllm[remote]"
+            ) from exc
+
+        base_url = (
+            self._config_forge_url
+            or os.environ.get(_CONFIG_FORGE_URL_ENV, "")
+        ).rstrip("/")
+
+        if not base_url:
+            raise ValueError(
+                f"ConfigForge URL not found. Set the {_CONFIG_FORGE_URL_ENV} environment "
+                f"variable or pass config_forge_url= to LLMClient()."
+            )
+
+        url = f"{base_url}/config/resolve/{self._ref}"
+        async with httpx.AsyncClient(timeout=self._timeout) as http:
+            response = await http.get(url)
+            response.raise_for_status()
+
+        payload = response.json()
+        profile = ModelProfile(**payload["data"])
+        self.cfg = PolyllmConfig(profiles={"default": profile})
 
     def _resolve_profile(self, profile: Optional[str]) -> ModelProfile:
         name = profile or self.cfg.default_profile
@@ -121,6 +184,8 @@ class LLMClient:
         return self.cfg.profiles[name]
 
     async def chat(self, messages: List[Dict[str, str]], *, profile: Optional[str] = None) -> ChatResult:
+        await self._ensure_config()
+
         p = self._resolve_profile(profile)
 
         api_key = _resolve_api_key(p, self.secrets)

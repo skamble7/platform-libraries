@@ -101,32 +101,42 @@ result = await client.chat(messages, profile="powerful")
 
 ## Usage — ConfigForge (Recommended)
 
-`RemoteConfigLoader` fetches a `ModelProfile` from the ConfigForge service by **canonical ref** and returns a ready `LLMClient`. No config object is constructed in application code — the profile lives in ConfigForge.
-
-Platform code only needs to carry the ref string. The ConfigForge URL is read from the `CONFIG_FORGE_URL` environment variable — no URL needs to be embedded in application code.
+Pass a **canonical ref string** directly to `LLMClient`. The config is fetched from ConfigForge lazily on the first `chat()` call and cached. The ConfigForge URL is read from the `CONFIG_FORGE_URL` environment variable — no URL or provider details are embedded in application code.
 
 ```python
-from polyllm import RemoteConfigLoader
+from polyllm import LLMClient
 
 # CONFIG_FORGE_URL is read from the environment
-loader = RemoteConfigLoader()
-
-# Fetch by canonical ref and get a ready LLMClient
-client = await loader.load("prod.llm.openai.astra.primary")
+client = LLMClient("prod.llm.openai.astra.primary")
 
 result = await client.chat([
     {"role": "user", "content": "Hello"},
 ])
 ```
 
+That's the entire integration. The platform carries only the ref string; polyllm owns everything else.
+
 ### Constructor options
 
 ```python
-RemoteConfigLoader(
-    base_url=None,        # If omitted, reads CONFIG_FORGE_URL from environment
-    timeout=5.0,          # HTTP timeout in seconds (default: 5.0)
-    secrets=my_provider,  # Custom SecretProvider (default: composite env+file+literal)
+LLMClient(
+    config,                  # PolyllmConfig (inline) OR str (ConfigForge ref)
+    timeout=5.0,             # HTTP timeout for ConfigForge fetch (default: 5.0)
+    secrets=my_provider,     # Custom SecretProvider (default: composite env+file+literal)
+    config_forge_url=None,   # Override CONFIG_FORGE_URL env var (useful in tests)
 )
+```
+
+### Advanced: `RemoteConfigLoader`
+
+For cases where you need to reuse one loader across multiple refs (e.g., explicit base URL in tests or a custom timeout):
+
+```python
+from polyllm import RemoteConfigLoader
+
+loader = RemoteConfigLoader(base_url="http://localhost:8040", timeout=10.0)
+client_a = await loader.load("prod.llm.openai.astra.primary")
+client_b = await loader.load("prod.llm.bedrock.zeta.modernization")
 ```
 
 ### Canonical ref format
@@ -297,16 +307,16 @@ result = await client.chat(messages)
 ### After (config fetched from ConfigForge)
 
 ```python
-from polyllm import RemoteConfigLoader
+from polyllm import LLMClient
 
-loader = RemoteConfigLoader(base_url="http://config-forge-service:8040")
-client = await loader.load("prod.llm.openai.astra.primary")
+client = LLMClient("prod.llm.openai.astra.primary")
 result = await client.chat(messages)
 ```
 
 **What changes:**
 - Application code drops the `PolyllmConfig` construction entirely
 - The `ModelProfile` lives in ConfigForge, registered once by ops/infra
+- `CONFIG_FORGE_URL` must be set in the deployment environment
 - Changing the model, provider, or key requires only a `PUT /config/{id}` to ConfigForge — no redeployment
 
 **What stays the same:**
