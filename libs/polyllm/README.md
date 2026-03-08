@@ -103,13 +103,16 @@ result = await client.chat(messages, profile="powerful")
 
 `RemoteConfigLoader` fetches a `ModelProfile` from the ConfigForge service by **canonical ref** and returns a ready `LLMClient`. No config object is constructed in application code — the profile lives in ConfigForge.
 
+Platform code only needs to carry the ref string. The ConfigForge URL is read from the `CONFIG_FORGE_URL` environment variable — no URL needs to be embedded in application code.
+
 ```python
 from polyllm import RemoteConfigLoader
 
-loader = RemoteConfigLoader(base_url="http://config-forge-service:8040")
+# CONFIG_FORGE_URL is read from the environment
+loader = RemoteConfigLoader()
 
 # Fetch by canonical ref and get a ready LLMClient
-client = await loader.load("prod.llm.openai.default")
+client = await loader.load("prod.llm.openai.astra.primary")
 
 result = await client.chat([
     {"role": "user", "content": "Hello"},
@@ -120,7 +123,7 @@ result = await client.chat([
 
 ```python
 RemoteConfigLoader(
-    base_url="http://config-forge-service:8040",  # ConfigForge URL
+    base_url=None,        # If omitted, reads CONFIG_FORGE_URL from environment
     timeout=5.0,          # HTTP timeout in seconds (default: 5.0)
     secrets=my_provider,  # Custom SecretProvider (default: composite env+file+literal)
 )
