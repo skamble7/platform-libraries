@@ -32,6 +32,17 @@ def _split_path_and_key(rest: str) -> Tuple[str, Optional[str]]:
     return rest.strip(), None
 
 
+class LiteralSecretProvider:
+    """Resolves literal:<value> refs — the secret value is embedded directly in the ref.
+    Intended for development / config-service stored secrets before Vault migration."""
+
+    def get(self, ref: str) -> Optional[str]:
+        scheme, rest = _split_ref(ref)
+        if scheme != "literal":
+            raise ValueError(f"LiteralSecretProvider only supports literal:* refs. Got: {ref}")
+        return rest  # the value itself IS the secret
+
+
 class EnvSecretProvider:
     def get(self, ref: str) -> Optional[str]:
         scheme, rest = _split_ref(ref)
@@ -109,4 +120,8 @@ class CompositeSecretProvider:
 
 
 def default_secret_provider() -> SecretProvider:
-    return CompositeSecretProvider(providers=(EnvSecretProvider(), FileSecretProvider()))
+    return CompositeSecretProvider(providers=(
+        LiteralSecretProvider(),
+        EnvSecretProvider(),
+        FileSecretProvider(),
+    ))

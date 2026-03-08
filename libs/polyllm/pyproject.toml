@@ -1,6 +1,6 @@
 [project]
 name = "polyllm"
-version = "0.1.4"
+version = "0.1.5"
 description = "Config-driven provider-agnostic LLM client (LangChain-backed)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ langchain = [
 ]
 
 yaml = ["pyyaml>=6.0"]
+remote = ["httpx>=0.27"]
 
 [build-system]
 requires = ["hatchling>=1.25"]
