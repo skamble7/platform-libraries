@@ -43,6 +43,9 @@ class GoogleGenAIAdapter(ProviderAdapter):
         if profile.max_retries is not None:
             kwargs.setdefault("max_retries", profile.max_retries)
 
+        if profile.json_mode:
+            kwargs.setdefault("response_mime_type", "application/json")
+
         kwargs.update(profile.provider_options or {})
 
         return ChatGoogleGenerativeAI(**kwargs)

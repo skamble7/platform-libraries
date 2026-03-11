@@ -1,6 +1,6 @@
 [project]
 name = "polyllm"
-version = "0.1.8"
+version = "0.1.9"
 description = "Config-driven provider-agnostic LLM client (LangChain-backed)"
 readme = "README.md"
 requires-python = ">=3.11"

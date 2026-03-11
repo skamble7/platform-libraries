@@ -44,6 +44,11 @@ class OpenAIAdapter(ProviderAdapter):
         if profile.max_retries is not None:
             kwargs["max_retries"] = profile.max_retries
 
+        if profile.json_mode:
+            model_kw = kwargs.get("model_kwargs") or {}
+            model_kw.setdefault("response_format", {"type": "json_object"})
+            kwargs["model_kwargs"] = model_kw
+
         # Non-secret passthrough (be careful what you allow here in enterprise policy)
         kwargs.update(profile.provider_options or {})
 

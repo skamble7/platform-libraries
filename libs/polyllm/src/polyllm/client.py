@@ -14,6 +14,32 @@ class ChatResult:
     raw: Dict[str, Any]
 
 
+def _strip_json_fences(text: str) -> str:
+    """
+    Strip markdown code fences that some providers (e.g. Claude via Bedrock) wrap JSON in,
+    despite being instructed not to. Called only when json_mode=True for providers that lack
+    a native structured-output API (currently: bedrock).
+
+    Handles:
+      - Pure JSON: returned as-is.
+      - ```json\\n{...}\\n``` : language tag stripped, JSON extracted.
+      - ```\\n{...}\\n``` : JSON extracted directly.
+    """
+    text = text.strip()
+    if text.startswith("{") or "```" not in text:
+        return text
+    for part in text.split("```"):
+        part = part.strip()
+        # Strip optional language tag line (e.g. "json" before the actual JSON)
+        if part and not part.startswith("{"):
+            first_newline = part.find("\n")
+            if first_newline != -1:
+                part = part[first_newline:].strip()
+        if part.startswith("{") and part.endswith("}"):
+            return part
+    return text
+
+
 def _coerce_content(raw: Any) -> Optional[str]:
     """
     Normalize LangChain AIMessage.content to a plain string.
@@ -137,6 +163,9 @@ class LLMClient:
         try:
             resp = await llm.ainvoke(messages)
             text = _coerce_content(getattr(resp, "content", None)) or str(resp)
+            # Bedrock has no native JSON mode API — strip code fences post-response.
+            if p.json_mode and p.provider == "bedrock":
+                text = _strip_json_fences(text)
         finally:
             # Prevent "Event loop is closed" warnings from dangling httpx clients
             await _maybe_close_chat_model(llm)

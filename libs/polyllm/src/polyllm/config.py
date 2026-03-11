@@ -40,6 +40,12 @@ class ModelProfile(BaseModel):
     # Example: {"top_p": 0.95, "safety_settings": [...], "convert_system_message_to_human": True}
     provider_options: Dict[str, Any] = Field(default_factory=dict)
 
+    # When True, polyllm requests structured JSON output from the provider:
+    #   - openai: response_format={"type": "json_object"} (guarantees raw JSON)
+    #   - google_genai: response_mime_type="application/json" (guarantees raw JSON)
+    #   - bedrock: code fences stripped from response text post-call (no API-level JSON mode)
+    json_mode: bool = False
+
     # ─────────────────────────────────────────────────────────────
     # Secrets (references only; never store secret values here)
     # ─────────────────────────────────────────────────────────────
