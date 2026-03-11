@@ -29,6 +29,17 @@ class BedrockAdapter(ProviderAdapter):
         if profile.aws_region:
             kwargs["region_name"] = profile.aws_region
 
+        if profile.timeout_seconds is not None:
+            try:
+                from botocore.config import Config as BotocoreConfig
+            except ImportError as exc:
+                raise RuntimeError(
+                    "botocore is required to set timeout_seconds for Bedrock. "
+                    "It is bundled with boto3/langchain-aws."
+                ) from exc
+            t = int(profile.timeout_seconds)
+            kwargs["config"] = BotocoreConfig(read_timeout=t, connect_timeout=t)
+
         # Explicit credentials via secret_refs (access_key + secret_key required; session_token optional)
         if credentials:
             if "access_key" not in credentials or "secret_key" not in credentials:
